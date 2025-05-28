@@ -38,6 +38,7 @@ class Reducer():
 
         self.minMatchSize: int = 4
         self.minChunkSize: int = 4  # sane default for now. Will be adjusted based on section size on scan()
+        self.maxChunks: int = 100
 
         # re-init for every scan
         self.lastPrintTime: int = 0
@@ -66,11 +67,12 @@ class Reducer():
         else: # >1mb
             self.minChunkSize = 64
         self.minMatchSize = self.minChunkSize * 2
+        num_chunks = min(self.maxChunks, size / self.minChunkSize)
 
         logging.info("Reducer Start: ScanSpeed:{} Iteration:{} MinChunkSize:{} MinMatchSize:{}".format(
             self.scanSpeed.name, self.iteration, self.minChunkSize, self.minMatchSize))
         timeStart = time.time()
-        self._scanDataPart(data, offsetStart, offsetEnd)
+        self._scanDataPart(data, offsetStart, offsetEnd, num_chunks=num_chunks)
         timeEnd = time.time()
 
         scanTime = round(timeEnd - timeStart)
@@ -97,9 +99,12 @@ class Reducer():
 
 
     # recursive
-    def _scanDataPart(self, data: Data, sectionStart: int, sectionEnd: int, num_chunks=2):
+    def _scanDataPart(self, data: Data, sectionStart: int, sectionEnd: int, num_chunks=100):
         size = sectionEnd - sectionStart
         chunkSize = math.ceil(size / num_chunks)
+        if chunkSize <= self.minChunkSize:
+            num_chunks = 2
+            chunkSize = math.ceil(size / num_chunks)
         self.chunks_tested += 1
         self._printStatus()
 
@@ -129,7 +134,10 @@ class Reducer():
         startOffset = sectionStart
         for i in range(num_chunks):
             datachunk = deepcopy(data)
-            datachunk.patchDataFill(startOffset, chunkSize)
+            if startOffset + chunkSize > sectionEnd:
+                datachunk.patchDataFill(startOffset, sectionEnd-startOffset)
+            else:
+                datachunk.patchDataFill(startOffset, chunkSize)
             endOffset = startOffset+chunkSize
             if i == num_chunks - 1:
                 endOffset = sectionEnd
@@ -138,17 +146,22 @@ class Reducer():
             parts.append(part)
             startOffset = endOffset
 
+        # print("{}-{} ({}): {}".format(sectionStart, sectionEnd, size, [part.detected for part in parts]))
+
         if all(part.detected for part in parts):
             # All parts are detected
             # Continue scanning both halves independantly, but with the rest of the data
             # zeroed out (instead of the complete file)
-            for part in parts:
-                datachunk = deepcopy(data)
-                if part.start != sectionStart:
-                    datachunk.patchDataFill(sectionStart, part.start - sectionStart)
-                if part.end != sectionEnd:
-                    datachunk.patchDataFill(part.end, sectionEnd - part.end)
-                self._scanDataPart(datachunk, part.start, part.end)
+            if num_chunks == 2:
+                for part in parts:
+                    datachunk = deepcopy(data)
+                    if part.start != sectionStart:
+                        datachunk.patchDataFill(sectionStart, part.start - sectionStart)
+                    if part.end != sectionEnd:
+                        datachunk.patchDataFill(part.end, sectionEnd - part.end)
+                    self._scanDataPart(datachunk, part.start, part.end)
+            else:
+                self._scanDataPart(data, sectionStart, sectionEnd, num_chunks=2)
 
         elif not any(part.detected for part in parts):
             # all parts arent detected anymore
