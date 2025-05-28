@@ -101,6 +101,8 @@ class Reducer():
     # recursive
     def _scanDataPart(self, data: Data, sectionStart: int, sectionEnd: int, num_chunks=100):
         size = sectionEnd - sectionStart
+        if num_chunks > self.maxChunks:
+            num_chunks = self.maxChunks
         chunkSize = math.ceil(size / num_chunks)
         if chunkSize <= self.minChunkSize:
             num_chunks = 2
