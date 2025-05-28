@@ -1,8 +1,10 @@
 import logging
 import time
+import math
 from intervaltree import Interval, IntervalTree
 from typing import List
 from copy import deepcopy
+from dataclasses import dataclass
 
 from model.model_base import Scanner, ScanSpeed
 from model.model_data import Data, Match
@@ -11,6 +13,14 @@ from model.file_model import BaseFile
 from myutils import *
 
 PRINT_DELAY_SECONDS = 2
+
+
+@dataclass
+class Part():
+    data:bytes
+    start:int
+    end:int
+    detected:bool = None
 
 
 class Reducer():
@@ -87,9 +97,9 @@ class Reducer():
 
 
     # recursive
-    def _scanDataPart(self, data: Data, sectionStart: int, sectionEnd: int):
+    def _scanDataPart(self, data: Data, sectionStart: int, sectionEnd: int, num_chunks=2):
         size = sectionEnd - sectionStart
-        chunkSize = int(size // 2)
+        chunkSize = math.ceil(size / num_chunks)
         self.chunks_tested += 1
         self._printStatus()
 
@@ -115,26 +125,33 @@ class Reducer():
             
             return
 
-        dataChunkTopNull = deepcopy(data)
-        dataChunkTopNull.patchDataFill(sectionStart, chunkSize)
+        parts = []
+        startOffset = sectionStart
+        for i in range(num_chunks):
+            datachunk = deepcopy(data)
+            datachunk.patchDataFill(startOffset, chunkSize)
+            endOffset = startOffset+chunkSize
+            if i == num_chunks - 1:
+                endOffset = sectionEnd
+            part = Part(datachunk, startOffset, endOffset)
+            part.detected = self._scanData(part.data)
+            parts.append(part)
+            startOffset = endOffset
 
-        dataChunkBotNull = deepcopy(data)
-        dataChunkBotNull.patchDataFill(sectionStart+chunkSize, chunkSize)
-
-        detectTopNull = self._scanData(dataChunkTopNull)
-        detectBotNull = self._scanData(dataChunkBotNull)
-
-        if detectTopNull and detectBotNull:
-            #logging.info("--> Both Detected")
-            # Both halves are detected
-            # Continue scanning both halves independantly, but with each other halve
+        if all(part.detected for part in parts):
+            # All parts are detected
+            # Continue scanning both halves independantly, but with the rest of the data
             # zeroed out (instead of the complete file)
-            self._scanDataPart(dataChunkBotNull, sectionStart, sectionStart+chunkSize)
-            self._scanDataPart(dataChunkTopNull, sectionStart+chunkSize, sectionEnd)
+            for part in parts:
+                datachunk = deepcopy(data)
+                if part.start != sectionStart:
+                    datachunk.patchDataFill(sectionStart, part.start - sectionStart)
+                if part.end != sectionEnd:
+                    datachunk.patchDataFill(part.end, sectionEnd - part.end)
+                self._scanDataPart(datachunk, part.start, part.end)
 
-        elif not detectTopNull and not detectBotNull:
-            #logging.info("--> Both UNdetected")
-            # both parts arent detected anymore
+        elif not any(part.detected for part in parts):
+            # all parts arent detected anymore
 
             if chunkSize <= self.minMatchSize:
                 # Small enough, no more detections.
@@ -146,17 +163,13 @@ class Reducer():
             else: 
                 # make it smaller still. 
                 # Take complete data (not nulled)
-                self._scanDataPart(data, sectionStart, sectionStart+chunkSize)
-                self._scanDataPart(data, sectionStart+chunkSize, sectionEnd)
+                for part in parts:
+                    self._scanDataPart(data, part.start, part.end)
 
-        elif not detectTopNull:
-            # Detection in the top half
-            #logging.info("--> Do Top")
-            self._scanDataPart(data, sectionStart, sectionStart+chunkSize)
-        elif not detectBotNull:
-            # Detection in the bottom half
-            #logging.info("--> Do Bot")
-            self._scanDataPart(data, sectionStart+chunkSize, sectionEnd)
+        else:
+            for part in parts:
+                if not part.detected:
+                    self._scanDataPart(data, part.start, part.end)
 
         return
 
