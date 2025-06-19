@@ -5,6 +5,37 @@ from model.model_code import Section, SectionsBag
 from model.file_model import BaseFile
 from dotnetfile import DotNetPE
 from dotnetfile.util import FileLocation
+from model.model_data import Data
+
+class DataPe(Data):
+    def __init__(self, pe):
+        self.pe = pe
+
+    @property
+    def _data(self):
+        return self.getBytes()
+
+    def getBytes(self):
+        return self.pe.write()
+    
+    def getBytesRange(self, start, end):
+        start = self.pe.get_rva_from_offset(start)
+        end = self.pe.get_rva_from_offset(end)
+        return self.pe.get_data(start, end - start)
+
+    def getLength(self):
+        return len(self.getBytes())
+
+    def patchData(self, offset, replace):
+        self.pe.set_bytes_at_offset(offset, replace)
+    
+    def swapData(self, offset_a, size_a, offset_b, size_b):
+        rva_a = self.pe.get_rva_from_offset(offset_a)
+        rva_b = self.pe.get_rva_from_offset(offset_b)
+        data_a = self.pe.get_data(rva_a, size_a)
+        data_b = self.pe.get_data(rva_b, size_b)
+        self.pe.set_bytes_at_rva(rva_a, data_b)
+        self.pe.set_bytes_at_rva(rva_b, data_a)
 
 
 class FilePe(BaseFile):
@@ -29,6 +60,7 @@ class FilePe(BaseFile):
         self.parsePeSections(self.pepe, self.data.getLength())
         # self.regionsBag
         self.parsePeRegions(self.pepe)
+        self.data = DataPe(self.pepe)
 
 
     def getScanSections(self):
